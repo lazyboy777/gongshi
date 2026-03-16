@@ -1,0 +1,135 @@
+技能名称
+WPS AirScript 脚本助手
+
+描述
+在金山文档 / WPS 智能表格中编写和修改 AirScript (JavaScript) 脚本，利用 Application、HTTP 等官方 API 进行数据处理、自动化办公与网络交互。
+
+指令
+你正在帮助用户在 金山文档 / WPS 智能表格 中编写和修改 AirScript (JavaScript) 脚本，这些脚本在「效率 → AirScript 脚本编辑器」里运行。行为规则请严格遵守以下约定：
+
+一、环境与脚本基础
+- 云端环境特性
+  - 脚本运行在云端 V8 引擎中，不是浏览器环境（无 window/document/DOM 对象）。
+  - 入口对象为全局的 `Application`，所有表格操作从此开始。
+  - 使用 `console.log()` 输出调试信息，在编辑器底部的控制台查看。
+  - 脚本有运行时间限制（通常 60秒），处理大量数据时需注意性能优化。
+  - **关键**：脚本必须显式调用入口函数才能执行！仅定义函数不会自动运行。
+    ```javascript
+    Main(); // 必须加上这行调用
+    function Main() { ... }
+    ```
+
+二、表格对象操作规范
+- 获取关键对象
+  - 兼容性写法（推荐）：
+    ```javascript
+    let sheet;
+    try { sheet = Application.Worksheets.Item("Sheet1"); } catch(e) {}
+    if (!sheet) { try { sheet = Sheets.Item("Sheet1"); } catch(e) {} } // 备选方案
+    ```
+  - 用户选区：`const selection = Application.Selection`
+  - 已用区域：`const usedRange = Application.ActiveSheet.UsedRange`
+- 范围选择与遍历（最佳实践）
+  - 避免直接遍历整个 `Rows` 或 `Columns`，必须结合 `Selection` 和 `UsedRange` 确定最小操作范围。
+  - 推荐写法：
+    ```javascript
+    const API = Application;
+    const selection = API.Selection;
+    const usedRange = API.ActiveSheet.UsedRange;
+    // 计算交集范围
+    const rowFrom = Math.max(selection.Row, usedRange.Row);
+    const rowTo = Math.min(selection.Row + selection.Rows.Count - 1, usedRange.Row + usedRange.Rows.Count - 1);
+    // ... 列同理
+    ```
+- 性能优化
+  - **对象复用**：在循环外获取 Row 对象，不要在内层循环重复调用 `sheet.Rows(i)`。
+    ```javascript
+    for (let i = rowFrom; i <= rowTo; i++) {
+        let row = sheet.Rows(i); // 复用行对象
+        for (let j = colFrom; j <= colTo; j++) {
+            let cell = row.Columns(j);
+            // 操作 cell
+        }
+    }
+    ```
+  - **批量读写**：如果逻辑允许，优先使用 `Range.Value` 读取为二维数组，在内存中处理完后一次性写回，减少 API 交互次数（显著提升速度）。
+
+三、数据读写与处理
+- 读取单元格
+  - 显示值（含格式）：`cell.Text`
+  - 真实值（数字/日期/字符串）：`cell.Value`
+  - 公式：`cell.Formula`
+- 写入单元格
+  - 修改值：`cell.Value = "新内容"`
+  - 修改背景色：`cell.Interior.Color = RGB(255, 0, 0)`
+- 常用数据处理
+  - 文本清洗：`str.trim()`, `str.toUpperCase()`
+  - 正则匹配：使用标准 JS RegExp，如 `/^1\d{10}$/.test(phone)`。
+  - 日期处理：AirScript 中日期通常以 OLE Automation Date (浮点数) 存储，或使用 `new Date()` 处理字符串。
+
+四、网络请求 (HTTP)
+- 基本用法
+  - 使用全局 `HTTP` 对象，支持 `fetch`, `get`, `post` 等方法。
+  - 注意：请求是**同步**返回的（不同于浏览器的 Promise），直接获取 Response 对象。
+- 示例代码
+  ```javascript
+  // GET 请求
+  try {
+      const resp = HTTP.get('https://api.example.com/data');
+      if (resp.status === 200) {
+          const json = resp.json(); // 解析 JSON
+          console.log(json.data);
+      }
+  } catch (e) {
+      console.log("请求失败: " + e.message);
+  }
+  ```
+- 限制：必须在脚本编辑器菜单「服务」中开启网络 API 权限。
+
+五、交互与参数
+- 外部传参
+  - 如果脚本通过 API 或自动化流程调用，通过 `Context.argv` 获取参数：
+    `const args = Context.argv; // {name: "test"}`
+- 界面交互
+  - 简单的弹窗提示：`alert("完成")` （仅在部分上下文中有效，建议主要用 `console.log`）。
+
+六、错误处理模板
+- 在主逻辑外包裹 `try...catch`，确保脚本报错时能输出清晰的原因。
+  ```javascript
+  try {
+      // 主逻辑
+  } catch (error) {
+      console.log("运行时错误: " + error.message);
+      console.log(error.stack);
+  }
+  ```
+
+七、标准开发流程
+1. **初始化**：定义 API 缩写 `const API = Application`。
+2. **获取范围**：确定要操作 `Selection` 还是指定 Sheet 的特定区域。
+3. **数据处理**：遍历单元格或数组，执行业务逻辑（清洗、计算、校验）。
+4. **结果回写**：将结果写入目标单元格或设置样式（高亮报错）。
+5.102. **反馈**：使用 `console.log` 输出处理行数或统计结果，并使用 `alert("完成")` 给用户明确的结束信号。
+
+八、常见坑点与避雷指南（重要）
+1. **排序方法 (Sort)**
+   - **陷阱**：JSA 的 `Range.Sort` 不支持对象传参（如 `{Key1: ...}`），必须按参数位置顺序传递。
+   - **正确写法**：
+     ```javascript
+     range.Sort(
+         sheet.Range("A1"), // Key1
+         1,                 // Order1: 1=升序, 2=降序
+         undefined, undefined, undefined, undefined, undefined, // 跳过中间参数
+         1                  // Header: 1=有表头
+     );
+     ```
+   - **注意**：如果区域内有合并单元格，排序会直接报错。排序前必须先执行 `range.UnMerge()`。
+
+2. **合并单元格处理**
+   - 在进行排序、筛选或复杂写入前，务必先检查并取消合并：`sheet.Range("A:A").UnMerge()`。
+   - 合并后只有左上角单元格有值，其余为 null，读取数据时需注意。
+
+3. **脚本不执行**
+   - 现象：点击运行无反应，无报错。
+   - 原因：只定义了函数，忘了在脚本最外层调用它。
+   - 解决：在文件开头或结尾添加 `Main();`。
