@@ -1,0 +1,266 @@
+Sub 排班表生成器()
+
+Application.ScreenUpdating = False '屏幕闪动关闭
+
+'定义变量
+Dim a As Integer '用于计数当天航班总数量
+Dim i As Integer '用于指示航班信息表中的第i行
+i = 1
+Dim m As Integer '用于计算同一架飞机当天执行的航班数量
+m = 1
+Dim x As Integer '用于表示排班表中的第x行
+x = 2
+Dim n As Integer '用于表示临时表格的第n行
+n = 1
+'Dim d As Integer '用于表示航班信息表中的第d行
+'d = 1
+Dim airPort As String  '用于表示当前所在的机场
+airPort = "北京大兴"
+
+'预处理航班信息
+ThisWorkbook.Sheets("航班信息").Activate
+ThisWorkbook.Sheets("航班信息").UsedRange.Select  '选取当前已使用的单元格
+Selection.Hyperlinks.Delete   '清除选中区域的超链接
+Selection.ClearFormats   '清除选中区域的的数据格式
+a = Selection.Rows.Count '计算选中区域共有a行
+Range(Cells(1, 1), Cells(a, 23)).Sort Range("D1"), xlAscending '将选中区域航班信息按照飞机号进行排列
+
+'1day
+'Columns("H:H").Select
+'Selection.Copy
+'Columns("W:W").Select
+'ActiveSheet.Paste
+'Application.CutCopyMode = False
+'Selection.TextToColumns Destination:=Range("W1"), DataType:=xlFixedWidth, FieldInfo:=Array(Array(0, 2), Array(2, 2)), TrailingMinusNumbers:=True
+'Do Until d > a
+'    If Cells(d, 23) = 1 Then
+'        Cells(d, 23) = 32
+'        Cells(d, 23) = Cells(d, 23) & Cells(d, 24)
+'   Else:
+'        Cells(d, 23) = Cells(d, 23) & Cells(d, 24)
+'        d = d + 1
+'    End If
+'Loop
+
+'初始化排班表
+ThisWorkbook.Sheets("排班表").Activate
+ThisWorkbook.Sheets("排班表").UsedRange.Select  '选取当前已使用的单元格
+Selection.ClearContents   '清除选中区域的内容
+Selection.ClearFormats   '清除选中区域的数据格式
+Selection.RowHeight = 14.25   '初始化行高
+Selection.ColumnWidth = 8.38  '初始化列宽
+ThisWorkbook.Sheets("排班表").Cells(1, 1).Value = "序号"
+ThisWorkbook.Sheets("排班表").Cells(1, 2).Value = "性质"
+ThisWorkbook.Sheets("排班表").Cells(1, 4).Value = "航班性质"
+ThisWorkbook.Sheets("排班表").Cells(1, 5).Value = "飞机号"
+ThisWorkbook.Sheets("排班表").Cells(1, 6).Value = "机型"
+ThisWorkbook.Sheets("排班表").Cells(1, 7).Value = "进港航班"
+ThisWorkbook.Sheets("排班表").Cells(1, 8).Value = "进港时间"
+ThisWorkbook.Sheets("排班表").Cells(1, 9).Value = "出港航班"
+ThisWorkbook.Sheets("排班表").Cells(1, 10).Value = "出港时间"
+ThisWorkbook.Sheets("排班表").Cells(1, 11).Value = "出发站"
+ThisWorkbook.Sheets("排班表").Cells(1, 12).Value = "到达站"
+ThisWorkbook.Sheets("排班表").Cells(1, 13).Value = "下一站"
+ThisWorkbook.Sheets("排班表").Cells(1, 3).Value = "飞机所属"
+'判断航班性质
+Do Until IsEmpty(Sheets("航班信息").Cells(i, 4)) = True  '判断航班信息表中是否还有数据
+        Do Until Sheets("航班信息").Cells(i, 4) <> Sheets("航班信息").Cells(i + 1, 4)
+                ThisWorkbook.Sheets("航班信息").Activate
+                Rows(i).Select
+                Selection.Copy
+                ThisWorkbook.Sheets("临时表格").Activate
+                Rows(m).Select
+                ActiveSheet.Paste
+                i = i + 1
+                m = m + 1
+        Loop
+                ThisWorkbook.Sheets("航班信息").Activate
+                Rows(i).Select
+                Selection.Copy
+                ThisWorkbook.Sheets("临时表格").Activate
+                Rows(m).Select
+                ActiveSheet.Paste
+        ThisWorkbook.Sheets("临时表格").UsedRange.Select  '选取当前已使用的单元格
+        Range(Cells(1, 1), Cells(m, 23)).Sort Range("H1"), xlAscending '将选中区域航班信息按照进港时间进行排列
+        
+        Do Until n > m
+            If ThisWorkbook.Sheets("临时表格").Cells(n, 6) = airPort Then
+                ThisWorkbook.Sheets("排班表").Cells(x, 1) = ""
+                ThisWorkbook.Sheets("排班表").Cells(x, 2) = ThisWorkbook.Sheets("临时表格").Cells(n, 2)  '2为正班
+                ThisWorkbook.Sheets("排班表").Cells(x, 5) = ThisWorkbook.Sheets("临时表格").Cells(n, 4)  '4为飞机号
+                ThisWorkbook.Sheets("排班表").Cells(x, 6) = ThisWorkbook.Sheets("临时表格").Cells(n, 5)  '5是机型
+                ThisWorkbook.Sheets("排班表").Cells(x, 7) = "——"
+                ThisWorkbook.Sheets("排班表").Cells(x, 9) = ThisWorkbook.Sheets("临时表格").Cells(n, 3) '3是出港航班
+                ThisWorkbook.Sheets("排班表").Cells(x, 4) = "航前"
+                ThisWorkbook.Sheets("排班表").Cells(x, 8) = "——"
+                ThisWorkbook.Sheets("排班表").Cells(x, 10) = ThisWorkbook.Sheets("临时表格").Cells(n, 8) '8为出港时间
+                ThisWorkbook.Sheets("排班表").Cells(x, 11) = ThisWorkbook.Sheets("临时表格").Cells(n, 6) '6为出发站
+                ThisWorkbook.Sheets("排班表").Cells(x, 12) = ThisWorkbook.Sheets("临时表格").Cells(n, 17) '6到达站
+                ThisWorkbook.Sheets("排班表").Cells(x, 13) = "——"
+                ThisWorkbook.Sheets("排班表").Cells(x, 3) = ThisWorkbook.Sheets("临时表格").Cells(n, 22)
+                ThisWorkbook.Sheets("排班表").Cells(x, 14) = 1
+                x = x + 1
+                n = n + 1
+            Else
+                If IsEmpty(Sheets("临时表格").Cells(n + 1, 6)) = True Then
+                    ThisWorkbook.Sheets("排班表").Cells(x, 1) = ""
+                    ThisWorkbook.Sheets("排班表").Cells(x, 2) = ThisWorkbook.Sheets("临时表格").Cells(n, 2)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 5) = ThisWorkbook.Sheets("临时表格").Cells(n, 4)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 6) = ThisWorkbook.Sheets("临时表格").Cells(n, 5)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 7) = ThisWorkbook.Sheets("临时表格").Cells(n, 3)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 9) = "——"
+                    ThisWorkbook.Sheets("排班表").Cells(x, 4) = "航后"
+                    ThisWorkbook.Sheets("排班表").Cells(x, 8) = ThisWorkbook.Sheets("临时表格").Cells(n, 19) '19为进港时间
+                    ThisWorkbook.Sheets("排班表").Cells(x, 10) = "——"
+                    ThisWorkbook.Sheets("排班表").Cells(x, 11) = ThisWorkbook.Sheets("临时表格").Cells(n, 6)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 12) = ThisWorkbook.Sheets("临时表格").Cells(n, 17)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 13) = "——"
+                    ThisWorkbook.Sheets("排班表").Cells(x, 3) = ThisWorkbook.Sheets("临时表格").Cells(n, 22)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 14) = 3
+                    x = x + 1
+                    n = n + 1
+                Else
+                    ThisWorkbook.Sheets("排班表").Cells(x, 1) = ""
+                    ThisWorkbook.Sheets("排班表").Cells(x, 2) = ThisWorkbook.Sheets("临时表格").Cells(n, 2)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 5) = ThisWorkbook.Sheets("临时表格").Cells(n, 4)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 6) = ThisWorkbook.Sheets("临时表格").Cells(n, 5)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 7) = ThisWorkbook.Sheets("临时表格").Cells(n, 3)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 9) = ThisWorkbook.Sheets("临时表格").Cells(n + 1, 3)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 4) = "短停"
+                    ThisWorkbook.Sheets("排班表").Cells(x, 8) = ThisWorkbook.Sheets("临时表格").Cells(n, 19)
+                    'ThisWorkbook.Sheets("排班表").Cells(x, 9) = ThisWorkbook.Sheets("临时表格").Cells(n, 8)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 10) = ThisWorkbook.Sheets("临时表格").Cells(n + 1, 8)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 11) = ThisWorkbook.Sheets("临时表格").Cells(n, 6)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 12) = ThisWorkbook.Sheets("临时表格").Cells(n, 17)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 13) = ThisWorkbook.Sheets("临时表格").Cells(n + 1, 17)
+                     ThisWorkbook.Sheets("排班表").Cells(x, 3) = ThisWorkbook.Sheets("临时表格").Cells(n, 22)
+                    ThisWorkbook.Sheets("排班表").Cells(x, 14) = 2
+                    x = x + 1
+                    n = n + 2
+                End If
+            End If
+        Loop
+        ThisWorkbook.Sheets("临时表格").Activate
+        ThisWorkbook.Sheets("临时表格").UsedRange.Select  '选取当前已使用的单元格
+        Selection.ClearContents   '清除选中区域的内容
+        Selection.ClearFormats   '清除选中区域的的数据格式
+        Selection.RowHeight = 14.25   '初始化行高
+        Selection.ColumnWidth = 8.38  '初始化列宽
+        i = i + 1
+        m = 1
+        n = 1
+Loop
+
+'对排班表按照时间顺序排序
+ThisWorkbook.Sheets("排班表").Activate
+Sheets("排班表").Range(Cells(1, 1), Cells(a, 23)).Sort Range("N2"), xlAscending, Range("H1"), , xlAscending, Range("J1"), xlAscending, xlYes '数据排序
+Columns("N").ClearContents
+
+
+'将航班信息按照航前短停航后分类汇总
+Dim u, v, w, c As Integer
+u = 2
+v = 1
+w = 1
+c = 1
+Do Until u >= x
+    If ThisWorkbook.Sheets("排班表").Cells(u, 4) = "航前" Then
+       ThisWorkbook.Sheets("排班表").Cells(u, 1) = v
+       Range(Cells(u, 1), Cells(u, 1)).Interior.ColorIndex = 2
+       Range(Cells(u, 1), Cells(u, 13)).Font.ColorIndex = 1
+       u = u + 1
+       v = v + 1
+    Else:
+        If ThisWorkbook.Sheets("排班表").Cells(u, 4) = "短停" Then
+        ThisWorkbook.Sheets("排班表").Cells(u, 1) = w
+        Range(Cells(u, 1), Cells(u, 13)).Interior.ColorIndex = 2
+        Range(Cells(u, 1), Cells(u, 13)).Font.ColorIndex = 1
+        u = u + 1
+        w = w + 1
+        Else
+        'v = 1
+        ThisWorkbook.Sheets("排班表").Cells(u, 1) = c
+        Range(Cells(u, 1), Cells(u, 13)).Interior.ColorIndex = 2
+        Range(Cells(u, 1), Cells(u, 13)).Font.ColorIndex = 1
+        u = u + 1
+        c = c + 1
+        End If
+    End If
+Loop
+
+'设置第一行标题行格式
+With Range("A1:M1")
+.Font.Bold = True '字体加粗
+.Font.ColorIndex = 1 '字体颜色
+.Font.Size = 13 '字体大小
+.Interior.ColorIndex = 16 '背景颜色
+End With
+
+'对航前航班前加一行标题行并设置格式
+ThisWorkbook.Sheets("排班表").Rows(2).Insert
+Cells(2, 1) = "航   前"
+With Range("A2.M2")
+.Merge
+.Font.Bold = True
+.Font.ColorIndex = 32
+.Font.Size = 13
+.Interior.ColorIndex = 15
+End With
+
+'对短停航班前加一行标题行并设置格式
+ThisWorkbook.Sheets("排班表").Rows(v + 2).Insert
+Cells(v + 2, 1) = "短   停"
+With Range(Cells(v + 2, 1), Cells(v + 2, 13))
+.Merge
+.Merge
+.Font.Bold = True
+.Font.ColorIndex = 32
+.Font.Size = 13
+.Interior.ColorIndex = 15
+End With
+
+'对航后航班前加一行标题行并设置格式
+ThisWorkbook.Sheets("排班表").Rows(v + w + 2).Insert
+Cells(v + w + 2, 1) = "航   后"
+With Range(Cells(v + w + 2, 1), Cells(v + w + 2, 13))
+.Merge
+.Font.Bold = True
+.Font.ColorIndex = 32
+.Font.Size = 13
+.Interior.ColorIndex = 15
+End With
+
+'对排班表的行高列宽水平垂直居中进行设置
+ThisWorkbook.Sheets("排班表").UsedRange.Select
+With Selection '设置排班表的格式
+.RowHeight = 20   '行高
+.ColumnWidth = 10  '列宽
+.HorizontalAlignment = xlCenter '水平居中
+.VerticalAlignment = xlCenter '垂直居中
+End With
+
+ '窗口设置
+With ActiveWindow
+.DisplayHeadings = False '行号列标
+.DisplayHorizontalScrollBar = False '水平滚动条
+.DisplayWorkbookTabs = True '工作表标签
+.DisplayGridlines = False '隐藏网格线
+End With
+
+With Application
+.Caption = "Schedule" '程序标题
+.StatusBar = "" '状态栏
+.DisplayFormulaBar = True
+.CommandBars(1).Enabled = True
+.CommandBars(3).Visible = True
+.CommandBars(4).Visible = True
+End With
+
+ThisWorkbook.Sheets("临时表格").Visible = 2
+Sheets("排班表").Cells(1, 1).Select
+Application.ScreenUpdating = True '屏幕闪动启动
+
+End Sub
+
+
+
