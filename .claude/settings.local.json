@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile \"E:\\\\ANNACONDA_FILES\\\\gongshi\\\\worktime_processor.py\")"
+    ]
+  }
+}

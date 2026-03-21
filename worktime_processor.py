@@ -1,27 +1,16 @@
-"""
-工时匹配处理器 - 根据机型和依据文件匹配标准工时
-作者：自动生成
-创建时间：2026-03-16
-版本：v1.0
-"""
-
 import re
 import time
-import sys
-import logging
 from typing import Any, Dict, List, Tuple, Optional
 
-import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger(__name__)
+# ========= 配置：根据你文档里的 Sheet 名和列名调整 =========
 
-SHEET_ORDERS = "导出的待匹配工时内容"
-SHEET_STD    = "工时参考标准文件"
-SHEET_MATCH  = "匹配结果"
-SHEET_UNMATCH = "未匹配结果"
-SHEET_SECTIONS = "工段分布"
+SHEET_ORDERS = "导出的待匹配工时内容"   # 工单所在工作表
+SHEET_STD    = "工时参考标准文件"   # 标准工时库工作表
+SHEET_MATCH  = "匹配结果"   # 匹配结果表
+SHEET_UNMATCH = "未匹配结果"  # 未匹配结果表
+SHEET_SECTIONS = "工段分布"  # 工段分布表
 
 COL_MODEL      = "机型"
 COL_REF_DOC    = "依据文件"
@@ -31,7 +20,6 @@ FUZZY_PREFIX_LEN = 6
 
 
 def normalize_model(model_raw: Any) -> str:
-    """标准化机型名称"""
     if model_raw is None or (isinstance(model_raw, float) and pd.isna(model_raw)):
         return ""
     s = str(model_raw).strip().upper()
@@ -104,7 +92,6 @@ def build_section_mapping(df_sections: pd.DataFrame) -> Dict[str, str]:
 # ========= 编码清洗 =========
 
 def normalize_reference_code(raw: Any) -> str:
-    """标准化依据文件编码"""
     if raw is None:
         return ""
     text = str(raw).strip()
@@ -125,239 +112,69 @@ def normalize_reference_code(raw: Any) -> str:
     return prefix + "".join(digits)
 
 
-# ========= 全向量化匹配逻辑 =========
+# ========= 构建标准库索引 =========
 
-def match_all_vectorized(df_orders: pd.DataFrame, df_std: pd.DataFrame, orders_status_col: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    全向量化匹配工单与标准工时库
-    
-    Args:
-        df_orders: 工单数据
-        df_std: 标准工时库数据
-        orders_status_col: 工单状态列名（可选）
-    
-    Returns:
-        合并后的DataFrame和空行掩码
-    """
-    logger.info("开始进行全向量化匹配...")
-    t_start = time.time()
-    
-    # 1. 预处理工单表
-    # 保留原始索引以便最后排序（如果需要）
-    df_orders = df_orders.copy()
-    df_orders["_orig_idx"] = range(len(df_orders))
-    
-    # 向量化生成 key
-    logger.info("正在计算工单匹配键...")
-    df_orders["norm_model"] = df_orders[COL_MODEL].astype(str).map(normalize_model)
-    df_orders["norm_code"] = df_orders[COL_REF_DOC].astype(str).map(normalize_reference_code)
-    
-    # 标记无效行
-    # 机型为空 且 依据文件为空
-    mask_empty = (df_orders["norm_model"] == "") & (df_orders["norm_code"] == "")
-    
-    # 2. 预处理标准库
-    # 同样向量化生成 key
-    logger.info("正在计算标准库匹配键...")
-    df_std = df_std.copy()
-    df_std["norm_model"] = df_std[COL_MODEL].astype(str).map(normalize_model)
-    df_std["norm_code"] = df_std[COL_REF_DOC].astype(str).map(normalize_reference_code)
-    
-    # 过滤标准库无效行
-    df_std_valid = df_std[
-        (df_std["norm_model"] != "") & 
-        (df_std["norm_code"] != "")
-    ].copy()
-    
-    # 准备用于 merge 的标准库子集
-    # 如果标准库有重复 (机型, 编码)，去重取第一个（或者按需处理）
-    df_std_exact = df_std_valid.drop_duplicates(subset=["norm_model", "norm_code"])
-    
-    # 3. 第一轮：精确匹配 (Exact Match)
-    logger.info("正在执行精确匹配...")
-    # 左连接：工单 LEFT JOIN 标准库 ON (机型, 编码)
-    df_merged = pd.merge(
-        df_orders, 
-        df_std_exact[["norm_model", "norm_code", COL_STD_HOURS]], 
-        on=["norm_model", "norm_code"], 
-        how="left",
-        suffixes=("", "_std")
-    )
-    
-    # 标记匹配成功的行
-    df_merged["match_type"] = np.where(df_merged[COL_STD_HOURS].notna(), "完全匹配", "未匹配")
-    df_merged["match_desc"] = np.where(
-        df_merged[COL_STD_HOURS].notna(), 
-        "根据机型和标准化编码完全匹配到标准工时", 
-        ""
-    )
-    
-    # 4. 第二轮：近似匹配 (Fuzzy Match) - 仅针对未匹配行
-    # 这一步较难完全向量化，因为要找“最长前缀”。
-    # 优化策略：
-    #   a. 筛选出未匹配的工单
-    #   b. 筛选出标准库中可能的候选集（构建前缀索引）
-    #   c. 仅对这部分做循环，或者用更高级的 merge 技巧
-    
-    # 这里我们采用一种折中方案：
-    # 依然构建前缀索引，但只对未匹配的行进行查找
-    # 并且使用 apply 替代 iterrows
-    
-    mask_unmatched = df_merged["match_type"] == "未匹配"
-    # 如果全匹配了，就跳过
-    if mask_unmatched.any():
-        logger.info(f"正在对 {mask_unmatched.sum()} 行未匹配数据进行近似匹配...")
-        
-        # 构建前缀索引 (只构建一次)
-        # 结构: {(model, prefix): [candidate_code1, candidate_code2...]}
-        # 为了加速，我们可以把标准库所有 code 及其 hours 存入字典
-        # {(model, code): hours}
-        std_dict = dict(zip(zip(df_std_valid["norm_model"], df_std_valid["norm_code"]), df_std_valid[COL_STD_HOURS]))
-        
-        # 构建前缀倒排索引: (model, prefix) -> list of full_codes
-        prefix_map = {}
-        for m, c in std_dict.keys():
-            p = c[:FUZZY_PREFIX_LEN] if len(c) >= FUZZY_PREFIX_LEN else c
-            if (m, p) not in prefix_map:
-                prefix_map[(m, p)] = []
-            prefix_map[(m, p)].append(c)
-            
-        def common_prefix_len(a: str, b: str) -> int:
-            n = min(len(a), len(b))
-            i = 0
-            while i < n and a[i] == b[i]:
-                i += 1
-            return i
-            
-        def try_fuzzy_match(row):
-            # 如果是空行或者已被标记为无效，跳过
-            if row["norm_model"] == "" and row["norm_code"] == "":
-                 return "未匹配", None, "无效行"
-            
-            m = row["norm_model"]
-            c = row["norm_code"]
-            
-            # 状态检查
-            status = str(row.get(orders_status_col, ""))
-            if status in ("已保留", "未完成"):
-                return "未匹配", None, f"工卡状态为{status}"
-                
-            p = c[:FUZZY_PREFIX_LEN] if len(c) >= FUZZY_PREFIX_LEN else c
-            candidates = prefix_map.get((m, p), [])
-            
-            if not candidates:
-                return "未匹配", None, "在标准工时库中未找到对应记录"
-                
-            # 找公共前缀最长的
-            best_code = max(candidates, key=lambda x: common_prefix_len(c, x))
-            hours = std_dict[(m, best_code)]
-            return "近似匹配", hours, f"根据机型和编码前缀近似匹配到标准工时，库编码为 {best_code}"
-
-        # 对未匹配行应用函数
-        # apply 返回的是 Series，包含 (type, hours, desc)
-        # 使用 result_type='expand' 拆分成多列
-        fuzzy_results = df_merged.loc[mask_unmatched].apply(try_fuzzy_match, axis=1, result_type='expand')
-        if not fuzzy_results.empty:
-            fuzzy_results.columns = ["match_type", COL_STD_HOURS, "match_desc"]
-            # 回填结果
-            df_merged.loc[mask_unmatched, ["match_type", COL_STD_HOURS, "match_desc"]] = fuzzy_results
-
-    logger.info(f"向量化匹配完成，总耗时 {time.time()-t_start:.2f} 秒")
-    return df_merged, mask_empty
+def build_std_index(df_std: pd.DataFrame) -> Tuple[
+    Dict[Tuple[str, str], Dict[str, Any]],
+    Dict[Tuple[str, str], List[Dict[str, Any]]]
+]:
+    index_exact: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    index_prefix: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for _, row in df_std.iterrows():
+        model = normalize_model(row.get(COL_MODEL))
+        ref_raw = row.get(COL_REF_DOC)
+        if not model and (ref_raw is None or (isinstance(ref_raw, float) and pd.isna(ref_raw))):
+            continue
+        norm_code = normalize_reference_code(ref_raw)
+        if not model or not norm_code:
+            continue
+        std_hours = row.get(COL_STD_HOURS)
+        data = {
+            "model": model,
+            "norm_code": norm_code,
+            "std_hours": std_hours
+        }
+        key = (model, norm_code)
+        if key not in index_exact:
+            index_exact[key] = data
+        prefix = norm_code[:FUZZY_PREFIX_LEN] if len(norm_code) >= FUZZY_PREFIX_LEN else norm_code
+        pkey = (model, prefix)
+        index_prefix.setdefault(pkey, []).append(data)
+    return index_exact, index_prefix
 
 
-# ========= 结果拆分与格式化 =========
+def common_prefix_len(a: str, b: str) -> int:
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
 
-def split_and_format_results(df_merged: pd.DataFrame, mask_empty: pd.Series, section_map: Dict[str, str],
-                              orders_ac_col: Optional[str] = None, orders_desc_col: Optional[str] = None,
-                              orders_emp_id_col: Optional[str] = None, orders_emp_name_col: Optional[str] = None):
-    """
-    拆分并格式化匹配结果
-    
-    Args:
-        df_merged: 合并后的数据
-        mask_empty: 空行掩码
-        section_map: 工段映射字典
-        orders_ac_col: 飞机号列名
-        orders_desc_col: 故障描述列名
-        orders_emp_id_col: 员工号列名
-        orders_emp_name_col: 员工名称列名
-    
-    Returns:
-        匹配行、未匹配行和原因统计
-    """
-    logger.info("正在生成最终报表...")
-    
-    match_rows = []
-    unmatch_rows = []
-    reason_counter = {}
-    
-    # 预计算工段
-    # 假设 emp_id 列存在
-    if orders_emp_id_col:
-        # 清洗工号
-        emp_ids = df_merged[orders_emp_id_col].astype(str).str.strip().str.replace(".0", "", regex=False)
-        # 映射工段
-        sections = emp_ids.map(section_map).fillna("未匹配工段")
-    else:
-        sections = pd.Series(["未匹配工段"] * len(df_merged), index=df_merged.index)
-        
-    df_merged["_section"] = sections
-    
-    # 拆分 match / unmatch
-    # 成功条件：match_type 为 完全匹配 或 近似匹配
-    mask_success = df_merged["match_type"].isin(["完全匹配", "近似匹配"])
-    
-    # 1. 成功的数据
-    df_success = df_merged[mask_success].copy()
-    if not df_success.empty:
-        # 构造输出列
-        # "所在工段", "机型", "飞机号", "依据文件", "故障描述（中文）", "关卡人工号", "关卡人名称", "标准化依据文件编码", "匹配类型", "匹配状态", "匹配到的标准工时", "匹配说明"
-        
-        # 提取需要的列，如果不存在则填空
-        res = pd.DataFrame()
-        res["所在工段"] = df_success["_section"]
-        res["机型"] = df_success[COL_MODEL]
-        res["飞机号"] = df_success[orders_ac_col] if orders_ac_col else ""
-        res["依据文件"] = df_success[COL_REF_DOC]
-        res["故障描述（中文）"] = df_success[orders_desc_col] if orders_desc_col else ""
-        res["关卡人工号"] = df_success[orders_emp_id_col] if orders_emp_id_col else ""
-        res["关卡人名称"] = df_success[orders_emp_name_col] if orders_emp_name_col else ""
-        res["标准化依据文件编码"] = df_success["norm_code"]
-        res["匹配类型"] = df_success["match_type"]
-        res["匹配状态"] = "匹配成功"
-        res["匹配到的标准工时"] = df_success[COL_STD_HOURS]
-        res["匹配说明"] = df_success["match_desc"]
-        
-        match_rows = res.values.tolist()
-        
-    # 2. 失败的数据 (排除无效空行)
-    # mask_empty 是之前标记的 "机型和依据文件都为空" 的行，直接丢弃，不算未匹配
-    mask_fail = (~mask_success) & (~mask_empty)
-    df_fail = df_merged[mask_fail].copy()
-    
-    if not df_fail.empty:
-        # "未匹配原因", 原始列..., "标准化依据文件编码", "匹配状态", "颜色标记"
-        # 统计原因
-        for reason in df_fail["match_desc"]:
-             reason_counter[reason] = reason_counter.get(reason, 0) + 1
-             
-        res = pd.DataFrame()
-        res["未匹配原因"] = df_fail["match_desc"]
-        # 复制原始列
-        for col in base_cols:
-            res[col] = df_fail[col]
-            
-        res["标准化依据文件编码"] = df_fail["norm_code"]
-        res["匹配状态"] = "未匹配"
-        
-        # 根据原因设置颜色标记
-        # "工卡状态为..." -> 黄色，其他 -> 红色
-        res["颜色标记"] = df_fail["match_desc"].apply(lambda x: "黄色" if "工卡状态" in str(x) else "红色")
-        
-        unmatch_rows = res.values.tolist()
 
-    return match_rows, unmatch_rows, reason_counter
+def match_single(
+    index_exact: Dict[Tuple[str, str], Dict[str, Any]],
+    index_prefix: Dict[Tuple[str, str], List[Dict[str, Any]]],
+    model_raw: Any,
+    ref_raw: Any
+) -> Tuple[str, str, Optional[Any], str]:
+    model = normalize_model(model_raw)
+    if not model:
+        return "", "未匹配", None, "机型为空，无法匹配"
+    norm_code = normalize_reference_code(ref_raw)
+    if not norm_code:
+        return "", "未匹配", None, "依据文件为空或格式无法识别，无法匹配"
+    key = (model, norm_code)
+    if key in index_exact:
+        std_hours = index_exact[key]["std_hours"]
+        return norm_code, "完全匹配", std_hours, "根据机型和标准化编码完全匹配到标准工时"
+    prefix = norm_code[:FUZZY_PREFIX_LEN] if len(norm_code) >= FUZZY_PREFIX_LEN else norm_code
+    pkey = (model, prefix)
+    candidates = index_prefix.get(pkey, [])
+    if candidates:
+        best = max(candidates, key=lambda c: common_prefix_len(norm_code, c["norm_code"]))
+        std_hours = best["std_hours"]
+        return norm_code, "近似匹配", std_hours, f"根据机型和编码前缀近似匹配到标准工时，库编码为 {best['norm_code']}"
+    return norm_code, "未匹配", None, "在标准工时库中未找到对应记录"
 
 
 def _norm(s: Any) -> str:
@@ -399,7 +216,6 @@ def ensure_header(df: pd.DataFrame) -> pd.DataFrame:
         df2 = df.iloc[1:].copy()
         new_cols = [str(v) if v is not None else "" for v in first.values]
         df2.columns = deduplicate_columns(new_cols)
-        df2.reset_index(drop=True, inplace=True)
         return df2
     
     # 确保原有列名也不重复
@@ -423,55 +239,15 @@ def locate_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
 # ========= 主流程：在当前文档中读 Sheet1/4，写 Sheet2/3 =========
 
 start_time = time.time()
-logger.info(">>> 脚本开始执行 <<<")
+print("开始读取工作表数据……")
 
-# --- 连通性测试 ---
-logger.info("正在进行环境连通性测试 (读取当前激活工作表 A1 单元格)...")
-try:
-    # 不指定 sheet_name，默认读取当前激活的 sheet，只读 A1
-    test_df = xl("A1")
-    logger.info(f"环境测试通过，读取到数据: {test_df.values.tolist() if not test_df.empty else '空'}")
-except Exception as e:
-    logger.info(f"警告: 环境连通性测试失败，可能是环境问题或没有激活的工作表。错误信息: {e}")
-    logger.info("尝试继续执行主流程...")
-# ------------------
-
-logger.info("开始读取工作表数据……")
-logger.info("提示：如果在此处卡顿过久，请检查工作表是否有大量空行（建议删除下方空白区域）")
-
-# 可选优化：如果表格行数非常多且卡顿，可以尝试取消下行注释并指定范围，例如 "A1:Z5000"
-# READ_RANGE_ORDERS = "A1:Z5000" 
-READ_RANGE_ORDERS = None 
-
-t0 = time.time()
-if READ_RANGE_ORDERS:
-    logger.info(f"正在读取工单表（范围 {READ_RANGE_ORDERS}）...")
-    df_orders = xl(READ_RANGE_ORDERS, sheet_name=SHEET_ORDERS)
-else:
-    logger.info(f"正在读取工单表 {SHEET_ORDERS} (全表模式)...")
-    df_orders = xl(sheet_name=SHEET_ORDERS)
-logger.info(f"工单表读取完成，耗时 {time.time()-t0:.2f} 秒，原始行数: {len(df_orders)}")
-
-t0 = time.time()
-logger.info(f"正在读取标准库表 {SHEET_STD}...")
+df_orders = xl(sheet_name=SHEET_ORDERS)
 df_std = xl(sheet_name=SHEET_STD)
-logger.info(f"标准库表读取完成，耗时 {time.time()-t0:.2f} 秒，原始行数: {len(df_std)}")
-
 try:
-    t0 = time.time()
-    logger.info(f"正在读取工段分布表 {SHEET_SECTIONS}...")
     df_sections = xl(sheet_name=SHEET_SECTIONS)
-    logger.info(f"工段分布表读取完成，耗时 {time.time()-t0:.2f} 秒")
 except Exception:
-    logger.info(f"警告：未找到工作表 {SHEET_SECTIONS}，将无法匹配工段信息。")
+    print(f"警告：未找到工作表 {SHEET_SECTIONS}，将无法匹配工段信息。")
     df_sections = pd.DataFrame()
-
-# 立即清理全空行，防止后续处理卡顿
-logger.info("正在清理无效空行...")
-df_orders.dropna(how='all', inplace=True)
-df_std.dropna(how='all', inplace=True)
-if not df_sections.empty:
-    df_sections.dropna(how='all', inplace=True)
 
 df_orders = ensure_header(df_orders)
 df_std = ensure_header(df_std)
@@ -497,18 +273,87 @@ COL_MODEL = orders_model_col
 COL_REF_DOC = orders_ref_col
 COL_STD_HOURS = std_hours_col
 
+print("开始构建标准工时索引……")
+index_exact, index_prefix = build_std_index(df_std)
+
 print("开始构建工段映射……")
 section_map = build_section_mapping(df_sections)
 
 base_cols = list(df_orders.columns)
 
-# 使用新的向量化匹配函数
-df_merged, mask_empty = match_all_vectorized(df_orders, df_std, orders_status_col)
+match_rows: List[List[Any]] = []
+unmatch_rows: List[List[Any]] = []
+unmatched_reason_counter: Dict[str, int] = {}
 
-# 使用新的结果生成函数
-match_rows, unmatch_rows, unmatched_reason_counter = split_and_format_results(
-    df_merged, mask_empty, section_map, orders_ac_col, orders_desc_col, orders_emp_id_col, orders_emp_name_col
-)
+total_rows = len(df_orders)
+print(f"开始匹配，共 {total_rows} 行工单……")
+
+for idx, (_, row) in enumerate(df_orders.iterrows(), start=1):
+    if row.isna().all() or all(
+        (isinstance(v, str) and not v.strip()) or pd.isna(v)
+        for v in row.values
+    ):
+        continue
+    model_raw = row.get(orders_model_col)
+    ref_raw = row.get(orders_ref_col)
+
+    # 增强过滤：如果机型和依据文件均为空（或只包含空白字符），视为无效行直接跳过
+    is_model_empty = model_raw is None or (isinstance(model_raw, float) and pd.isna(model_raw)) or str(model_raw).strip() == ""
+    is_ref_empty = ref_raw is None or (isinstance(ref_raw, float) and pd.isna(ref_raw)) or str(ref_raw).strip() == ""
+    
+    if is_model_empty and is_ref_empty:
+        continue
+    
+    # 获取员工信息及工段
+    emp_id = row.get(orders_emp_id_col) if orders_emp_id_col else None
+    emp_name = row.get(orders_emp_name_col) if orders_emp_name_col else None
+    emp_id_str = str(emp_id).strip().replace(".0", "") if emp_id is not None else ""
+    section = section_map.get(emp_id_str, "未匹配工段")
+    
+    # 检查工卡状态
+    card_status = row.get(orders_status_col) if orders_status_col else None
+    status_str = str(card_status).strip() if card_status else ""
+    
+    if status_str in ("已保留", "未完成"):
+        norm_code = normalize_reference_code(ref_raw)
+        reason = f"工卡状态为{status_str}"
+        base_vals = [row.get(col) for col in base_cols]
+        # 修改：未匹配原因放第一列
+        unmatch_rows.append([reason] + base_vals + [norm_code, "未匹配", "黄色"])
+        unmatched_reason_counter[reason] = unmatched_reason_counter.get(reason, 0) + 1
+        continue
+        
+    try:
+        norm_code, match_type, std_hours, desc = match_single(index_exact, index_prefix, model_raw, ref_raw)
+        base_vals = [row.get(col) for col in base_cols]
+        # 核心字段重组：所在工段(首列) + 机型 + 飞机号 + 依据文件 + 故障描述 + 关卡人工号 + 关卡人名称
+        core_vals = [
+            section,
+            row.get(orders_model_col),
+            row.get(orders_ac_col) if orders_ac_col else None,
+            row.get(orders_ref_col),
+            row.get(orders_desc_col) if orders_desc_col else None,
+            emp_id,
+            emp_name
+        ]
+        if match_type in ("完全匹配", "近似匹配"):
+            match_rows.append(core_vals + [norm_code, match_type, "匹配成功", std_hours, desc])
+        else:
+            reason = desc
+            # 修改：未匹配原因放第一列
+            unmatch_rows.append([reason] + base_vals + [norm_code, "未匹配", "红色"])
+            unmatched_reason_counter[reason] = unmatched_reason_counter.get(reason, 0) + 1
+    except Exception:
+        norm_code = normalize_reference_code(ref_raw)
+        reason = "处理该行数据时发生异常，请检查数据格式"
+        base_vals = [row.get(col) for col in base_cols]
+        # 修改：未匹配原因放第一列
+        unmatch_rows.append([reason] + base_vals + [norm_code, "未匹配", "红色"])
+        unmatched_reason_counter[reason] = unmatched_reason_counter.get(reason, 0) + 1
+
+    if idx % 500 == 0 or idx == total_rows:
+        elapsed = time.time() - start_time
+        print(f"已处理 {idx}/{total_rows} 行，用时 {elapsed:.1f} 秒")
 
 # 生成 DataFrame
 match_headers = [
